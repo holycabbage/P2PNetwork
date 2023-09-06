@@ -25,9 +25,9 @@ public class ZookeeperClient implements Watcher{
             return null;
         }
     
-        // Sort the list based on the node ID (assuming that's how you define the ring)
+        // Sort the list based on the node ID in ascending order
         Collections.sort(children, (node1, node2) -> {
-            String hash1 = HashUtil.sha1(node1); // Assuming HashUtil.sha1() hashes the node IDs
+            String hash1 = HashUtil.sha1(node1); 
             String hash2 = HashUtil.sha1(node2);
             return hash1.compareTo(hash2);
         });
@@ -36,6 +36,7 @@ public class ZookeeperClient implements Watcher{
         String targetNode = null;
         for (String child : children) {
             String childHash = HashUtil.sha1(child);
+            // If the hashed key is smaller than the hashed node ID, we have found the target node 
             if (hashedKey.compareTo(childHash) <= 0) {
                 targetNode = child;
                 break;
@@ -47,7 +48,6 @@ public class ZookeeperClient implements Watcher{
             targetNode = children.get(0);
         }
     
-        // Assuming the data stored at the child node in Zookeeper is the node's address (ip:port)
         byte[] nodeData = zookeeper.getData("/nodes/" + targetNode, false, null);
         String nodeAddress = new String(nodeData);
     

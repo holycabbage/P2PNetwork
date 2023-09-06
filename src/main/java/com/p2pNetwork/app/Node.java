@@ -1,3 +1,6 @@
+// Refference: https://www.rgagnon.com/javadetails/java-get-url-parameters-using-jdk-http-server.html
+// Refference: https://www.digitalocean.com/community/tutorials/apache-httpclient-example-closeablehttpclient
+
 package com.p2pNetwork.app;
 
 import org.apache.zookeeper.ZooKeeper;
@@ -18,6 +21,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.util.HashMap;
+import java.util.Map;
 
 public class Node{
     private final String nodeID;
@@ -39,11 +43,10 @@ public class Node{
     private void registerWithZookeeper() {
         try {
             ZooKeeper zk = zooKeeperClient.getZookeeper();
-            String path = "/node_" + nodeID;
+            String path = "/nodes" + nodeID;
             if (zk.exists(path, false) == null) {
                 zk.create(path, (ipAddress + ":" + port).getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
             }
-            //zk.create("/node_" + nodeID, (ipAddress + ":" + port).getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -52,11 +55,23 @@ public class Node{
 
     private void initHttpServer() {
         try {
+            // Start the HTTP server
             HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
             server.createContext("/put", new PutHandler());
             server.createContext("/get", new GetHandler());
             server.setExecutor(null);
             server.start();
+
+            // Shutdown hook to deregister from Zookeeper
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                if (zooKeeperClient != null) {
+                    try {
+                        zooKeeperClient.getZookeeper().delete("/nodes" + nodeID, -1);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+            }));
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -66,18 +81,36 @@ public class Node{
         @Override
         public void handle(HttpExchange t) throws IOException {
             // Handle the PUT request
-            String query = t.getRequestURI().getQuery();
-            String[] params = query.split("=");
-            if (params.length != 2) {
-                System.out.println("Invalid query");
-                return;
-            }
-            String key = params[0];
-            String value = params[1];
-            String response = "";
 
+            // Parse the query string to get the key and value
+            // String query = t.getRequestURI().getQuery();
+            // String[] params = query.split("=");
+            // if (params.length != 2) {
+            //     System.out.println("Invalid query");
+            //     return;
+            // }
+            // String key = params[0];
+            // String value = params[1];
+
+            String query = t.getRequestURI().getQuery();
+            String[] params = query.split("&");
+            Map<String, String> paramMap = new HashMap<>();
+            for (String param : params) {
+                String[] keyValue = param.split("=");
+                if (keyValue.length != 2) {
+                    System.out.println("Invalid query");
+                    return;
+                }
+                paramMap.put(keyValue[0], keyValue[1]);
+            }
+
+            String key = paramMap.get("key");
+            String value = paramMap.get("value");
+            String response = "";
             String hashedKey = HashUtil.sha1(key);
-            if (hashedKey.compareTo(nodeID) > 0) {
+
+            // If the ID is the same as the node's own ID
+            if (hashedKey.compareTo(nodeID) == 0) {
                 inMemoryHashmap.put(key, value);
                 System.out.println("Successfully put " + key + " " + value);
             } else {
@@ -89,14 +122,17 @@ public class Node{
                     return;
                 }
 
+                // Forward the request to the appropriate node
                 try (CloseableHttpClient httpClient = HttpClients.createDefault()) {
                     HttpPut httpPut = new HttpPut("http://" + targetAddress + "/put?key=" + key + "&value=" + value);
+                    // send the PUT request to specified URL
                     try (CloseableHttpResponse httpResponse = httpClient.execute(httpPut)) {
                         response = EntityUtils.toString(httpResponse.getEntity());
                     }
                 }
             }
             
+            // Return the response
             t.sendResponseHeaders(200, response.length());
             OutputStream os = t.getResponseBody();
             os.write(response.getBytes());
@@ -116,11 +152,11 @@ public class Node{
             String hashedKey = HashUtil.sha1(key);
             String response = "";
 
-            if (hashedKey.compareTo(nodeID) > 0) {
+
+            if (hashedKey.compareTo(nodeID) == 0) {
                 String value = inMemoryHashmap.get(key);
                 value = value == null ? "Key not found" : value;
             } else {
-                // Find the appropriate node using Zookeeper
                 String targetAddress;
                 try {
                     targetAddress = zooKeeperClient.findTargetNode(hashedKey);
@@ -128,6 +164,7 @@ public class Node{
                     e.printStackTrace();
                     return;
                 }
+
                 try (CloseableHttpClient httpClient = HttpClients.createDefault()) {
                     HttpGet httpGet = new HttpGet("http://" + targetAddress + "/get?key=" + key);
                     try (CloseableHttpResponse httpResponse = httpClient.execute(httpGet)) {
